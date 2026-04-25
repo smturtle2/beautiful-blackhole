@@ -78,7 +78,7 @@ const fragmentShader = /* glsl */ `
 	  float fbm3(vec3 p) {
     float value = 0.0;
     float amp = 0.5;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
       value += noise3(p) * amp;
       p = p * 2.07 + vec3(13.1, 7.7, 19.4);
       amp *= 0.52;
@@ -138,7 +138,9 @@ const fragmentShader = /* glsl */ `
 	    float cylindricalR = length(diskHit.xz);
 	    float isco = mix(2.9, 1.58, uSpin);
 	    float outer = 6.8;
-	    float radialWindow = smoothstep(isco, isco + 0.24, cylindricalR) * (1.0 - smoothstep(outer * 0.78, outer, cylindricalR));
+	    float innerFade = smoothstep(isco - 0.1, isco + 0.42, cylindricalR);
+	    float outerFade = 1.0 - smoothstep(outer * 0.7, outer + 0.58, cylindricalR);
+	    float radialWindow = innerFade * outerFade;
 	    float diskAge = smoothstep(isco, outer, cylindricalR);
 	    float angle = atan(diskHit.z, diskHit.x);
 	    float orbitRate = (0.74 + uMotion * 1.08) / max(pow(cylindricalR, 1.52), 1.0);
@@ -148,12 +150,16 @@ const fragmentShader = /* glsl */ `
 	      diskAge * 3.8,
 	      sin(shear) * cylindricalR * 0.72
 	    );
-	    float filaments = fbm3(flowPoint * vec3(1.35, 0.85, 1.35) + vec3(time * 0.14, 4.0, -time * 0.12));
-	    float grain = 0.5 + 0.5 * sin(dot(flowPoint, vec3(2.3, 1.1, 1.7)) - time * 0.18);
-	    if (uRenderDetail > 0.35) {
-	      grain = noise3(flowPoint * vec3(2.1, 1.0, 2.1) + vec3(-time * 0.08, 8.0, time * 0.06));
-	    }
-	    float streaks = mix(0.78, 1.26, smoothstep(0.18, 0.94, filaments * 0.75 + grain * 0.45));
+	    vec3 warpedFlow = flowPoint + vec3(
+	      fbm3(flowPoint * 0.58 + vec3(0.0, time * 0.035, 4.0)) - 0.5,
+	      0.0,
+	      fbm3(flowPoint * 0.62 + vec3(6.0, -time * 0.03, 1.0)) - 0.5
+	    ) * 0.48;
+	    float filaments = fbm3(warpedFlow * vec3(1.15, 0.78, 1.15) + vec3(time * 0.08, 4.0, -time * 0.07));
+	    float grain = noise3(warpedFlow * vec3(2.0, 1.0, 2.0) + vec3(-time * 0.06, 8.0, time * 0.05));
+	    float fineDust = noise3(warpedFlow * vec3(4.1, 1.3, 4.1) + vec3(time * 0.04, 12.0, -time * 0.035));
+	    float filamentSignal = filaments * 0.55 + grain * 0.24 + fineDust * 0.21;
+	    float streaks = mix(0.97, 1.055, smoothstep(0.14, 0.94, filamentSignal));
 
 	    vec3 tangent = normalize(vec3(-diskHit.z, 0.0, diskHit.x));
 	    float orbitalVelocity = clamp(sqrt(1.0 / max(cylindricalR, 1.0)) * mix(1.0, 1.48, uSpin), 0.08, 0.82);
@@ -166,12 +172,13 @@ const fragmentShader = /* glsl */ `
 	    float lensWrap = smoothstep(0.36, 1.42, bendAmount);
 	    float photonBoost = exp(-abs(worldR - 1.52) / 0.44);
 	    float silhouetteEscape = smoothstep(1.04, 1.42, worldR);
-	    float density = radialWindow * streaks * mix(0.92, 1.16, filaments) * silhouetteEscape;
+	    float softSilhouette = smoothstep(0.92, 1.58, worldR);
+	    float density = radialWindow * streaks * mix(0.98, 1.045, filaments) * silhouetteEscape * softSilhouette;
 	    float strength = density * pow(temperature, 2.58) * doppler * uDiskLuminosity;
 	    strength *= 1.0 + uLensing * (1.12 * lensWrap + 1.85 * photonBoost);
-	    opacity = clamp(density * (0.095 + lensWrap * 0.075), 0.0, 0.28);
+	    opacity = clamp(density * (0.078 + lensWrap * 0.055), 0.0, 0.22);
 	    vec3 heat = thermalColor(temperature);
-	    vec3 causticWhite = mix(heat, vec3(1.0, 0.96, 0.78), smoothstep(0.36, 1.0, photonBoost + lensWrap * 0.35));
+	    vec3 causticWhite = mix(heat, vec3(1.0, 0.96, 0.78), smoothstep(0.2, 1.08, photonBoost + lensWrap * 0.32));
 	    return causticWhite * strength * (1.35 + uExposure * 3.35);
 	  }
 
@@ -179,11 +186,11 @@ const fragmentShader = /* glsl */ `
 	    float cylindricalR = length(diskPos.xz);
 	    float isco = mix(2.92, 1.64, uSpin);
 	    float outer = 6.35;
-	    float radialWindow = smoothstep(isco, isco + 0.28, cylindricalR) * (1.0 - smoothstep(outer * 0.76, outer, cylindricalR));
+	    float radialWindow = smoothstep(isco - 0.08, isco + 0.48, cylindricalR) * (1.0 - smoothstep(outer * 0.68, outer + 0.52, cylindricalR));
 	    float diskAge = smoothstep(isco, outer, cylindricalR);
-	    float scaleHeight = mix(0.16, 0.54, diskAge) * mix(0.95, 1.24, uDiskLuminosity);
-	    float coreDensity = exp(-pow(abs(diskPos.y) / max(scaleHeight, 0.03), 1.35));
-	    float atmosphere = exp(-pow(abs(diskPos.y) / max(scaleHeight * 2.2, 0.04), 1.7)) * 0.18;
+	    float scaleHeight = mix(0.19, 0.68, diskAge) * mix(0.95, 1.24, uDiskLuminosity);
+	    float coreDensity = exp(-pow(abs(diskPos.y) / max(scaleHeight, 0.03), 1.18));
+	    float atmosphere = exp(-pow(abs(diskPos.y) / max(scaleHeight * 2.75, 0.04), 1.42)) * 0.24;
 	    float verticalDensity = coreDensity + atmosphere;
 
 	    float angle = atan(diskPos.z, diskPos.x);
@@ -194,8 +201,10 @@ const fragmentShader = /* glsl */ `
 	      diskPos.y * 1.8,
 	      sin(shear) * cylindricalR * 0.62
 	    );
-	    float filaments = 0.5 + 0.5 * sin(dot(flowPoint, vec3(1.7, 2.9, 1.3)) + time * 0.24);
-	    float streaks = mix(0.9, 1.08, 0.5 + 0.5 * sin(shear * 6.0 + filaments * 4.2));
+	    float filaments = fbm3(flowPoint * vec3(1.15, 0.85, 1.15) + vec3(-time * 0.06, 2.0, time * 0.05));
+	    float dust = noise3(flowPoint * vec3(3.4, 1.2, 3.4) + vec3(-time * 0.05, 3.0, time * 0.06));
+	    float streakSignal = filaments * 0.68 + dust * 0.32;
+	    float streaks = mix(0.96, 1.06, smoothstep(0.18, 0.92, streakSignal));
 
 	    vec3 tangent = normalize(vec3(-diskPos.z, 0.0, diskPos.x));
 	    float orbitalVelocity = clamp(sqrt(1.0 / max(cylindricalR, 1.0)) * mix(1.0, 1.46, uSpin), 0.08, 0.78);
@@ -205,9 +214,9 @@ const fragmentShader = /* glsl */ `
 	    float zeroTorque = smoothstep(isco, isco * 1.42, cylindricalR);
 	    float gravityShift = sqrt(clamp(1.0 - 1.0 / max(cylindricalR, 1.06), 0.04, 1.0));
 	    float temperature = pow(isco / max(cylindricalR, isco), 0.74) * zeroTorque * gravityShift;
-	    float density = radialWindow * verticalDensity * mix(0.76, 1.2, filaments) * streaks;
+	    float density = radialWindow * verticalDensity * mix(0.9, 1.08, streakSignal) * streaks;
 	    float strength = density * pow(temperature, 2.35) * doppler * uDiskLuminosity * 0.78;
-	    opacity = clamp(density * 0.032, 0.0, 0.082);
+	    opacity = clamp(density * 0.026, 0.0, 0.07);
 	    return thermalColor(temperature) * strength * (1.0 + uExposure * 2.65);
 	  }
 
@@ -215,13 +224,14 @@ const fragmentShader = /* glsl */ `
 	    float r = length(worldPos);
 	    vec3 normal = worldPos / max(r, 0.001);
 	    float photonSphere = 1.52;
-	    float shell = exp(-abs(r - photonSphere) / 0.22);
+	    float shell = exp(-abs(r - photonSphere) / 0.34);
 	    float grazing = pow(clamp(1.0 - abs(dot(normal, rayDir)), 0.0, 1.0), 1.72);
 	    float equatorialMemory = exp(-pow(abs(diskPos.y) / 0.5, 1.55));
-	    float turbulent = 0.94 + 0.12 * sin(dot(normal, vec3(9.7, 4.1, 6.3)) + time * 0.12);
+	    float turbulentNoise = fbm3(normal * vec3(2.4, 3.1, 2.7) + vec3(time * 0.04, 5.0, -time * 0.035));
+	    float turbulent = mix(0.96, 1.06, turbulentNoise);
 	    float escapeGlow = smoothstep(0.34, 1.7, bendAmount);
-	    float density = shell * grazing * equatorialMemory * turbulent * escapeGlow * 2.05;
-	    opacity = clamp(density * 0.038, 0.0, 0.085);
+	    float density = shell * grazing * equatorialMemory * turbulent * escapeGlow * 1.58;
+	    opacity = clamp(density * 0.028, 0.0, 0.066);
 	    vec3 shellColor = mix(vec3(1.0, 0.56, 0.2), vec3(1.0, 0.97, 0.72), grazing);
 	    return shellColor * density * uGlare * (0.42 + uExposure * 1.55);
 	  }
@@ -255,7 +265,7 @@ const fragmentShader = /* glsl */ `
 	    bool captured = false;
 	    mat3 diskBasis = rotateX(mix(0.08, 0.62, uInclination));
 
-	    float marchJitter = (hash21(vUv * uResolution + floor(time * 12.0)) - 0.5) * 0.035;
+	    float marchJitter = (hash21(vUv * uResolution) - 0.5) * 0.024;
 	    pos += dir * marchJitter;
 
 	    for (int i = 0; i < MAX_RAYMARCH_STEPS; i++) {
@@ -275,38 +285,54 @@ const fragmentShader = /* glsl */ `
 	      vec3 currentDiskPoint = diskBasis * pos;
 	      float currentDiskR = length(currentDiskPoint.xz);
 	      float photonDetail = exp(-abs(r - photonSphere) / 1.15);
-	      float diskDetail = smoothstep(1.0, 0.0, abs(currentDiskPoint.y)) * smoothstep(7.7, 1.35, currentDiskR);
+	      float diskBand = smoothstep(1.62, 0.0, abs(currentDiskPoint.y));
+	      float diskRadiusBand = smoothstep(8.2, 1.18, currentDiskR);
+	      float diskDetail = diskBand * diskRadiusBand;
 	      float detailZone = clamp(max(photonDetail, diskDetail), 0.0, 1.0);
 	      float emptySpaceScale = mix(1.5, 1.02, uRenderDetail);
 	      float stepSize = clamp(r * mix(0.046, 0.074, smoothstep(4.0, 16.0, r)), 0.038, 0.52);
-	      stepSize *= mix(emptySpaceScale, 0.9, detailZone);
+	      stepSize *= mix(emptySpaceScale, 0.82, detailZone);
+	      float diskTargetStep = mix(0.052, 0.038, uRenderDetail);
+	      float diskStepBlend = smoothstep(0.42, 1.0, diskDetail);
+	      stepSize = mix(stepSize, min(stepSize, diskTargetStep), diskStepBlend * 0.62);
 	      vec3 gravityDir = -pos / max(r, 0.001);
 	      float bend = mass / max(r * r, eventHorizon * eventHorizon * 0.35);
 	      dir = normalize(dir + gravityDir * bend * stepSize * 1.18);
 	      vec3 nextPos = pos + dir * stepSize;
 	      bendAccum += bend * stepSize;
 
-	      vec3 rayPoint = mix(pos, nextPos, 0.55);
+	      float sampleJitter = hash21(
+	        vUv * uResolution + vec2(float(i) * 17.31, floor(uTime * 48.0))
+	      ) - 0.5;
+	      float sampleT = clamp(0.55 + sampleJitter * mix(0.08, 0.28, detailZone), 0.18, 0.82);
+	      vec3 rayPoint = mix(pos, nextPos, sampleT);
 	      float pointR = length(rayPoint);
 	      vec3 diskPoint = diskBasis * rayPoint;
 	      vec3 diskPrev = diskBasis * pos;
 	      vec3 diskNext = diskBasis * nextPos;
 	      vec3 diskDir = normalize(diskBasis * dir);
 	      if (pointR > eventHorizon * 1.035 && pointR < 8.6 && transmittance > 0.015) {
-	        float diskDelta = diskPrev.y - diskNext.y;
-	        if (abs(diskDelta) > 0.0001 && diskPrev.y * diskNext.y <= 0.0) {
-	          float diskT = clamp(diskPrev.y / diskDelta, 0.0, 1.0);
-	          vec3 diskHit = mix(diskPrev, diskNext, diskT);
-	          float hitRadius = length(diskHit.xz);
-	          if (hitRadius > 1.42 && hitRadius < 7.15) {
-	            vec3 worldHit = mix(pos, nextPos, diskT);
-	            float hitWorldR = length(worldHit);
-	            if (hitWorldR > eventHorizon * 1.018) {
-	              float surfaceOpacity = 0.0;
-	              vec3 surfaceLight = accretionDiskSurfaceEmission(diskHit, diskDir, time, bendAccum, hitWorldR, surfaceOpacity);
-	              color += surfaceLight * transmittance;
-	              transmittance *= 1.0 - clamp(surfaceOpacity, 0.0, 0.42);
-	            }
+	        float surfaceRadius = length(diskPoint.xz);
+	        if (surfaceRadius > 1.42 && surfaceRadius < 7.15) {
+	          float sheetHeight = mix(0.075, 0.045, uRenderDetail);
+	          float segmentVerticalTravel = abs(diskNext.y - diskPrev.y);
+	          float minSegmentY = diskPrev.y * diskNext.y <= 0.0 ? 0.0 : min(abs(diskPrev.y), abs(diskNext.y));
+	          float effectiveSheetHeight = max(sheetHeight, segmentVerticalTravel * 0.5 + fwidth(diskPoint.y) * 1.5);
+	          float sheetCoverage = exp(-pow(minSegmentY / max(effectiveSheetHeight, 0.001), 1.45));
+	          float radialFeather = smoothstep(1.34, 1.74, surfaceRadius) * (1.0 - smoothstep(6.55, 7.35, surfaceRadius));
+	          float grazingPath = 1.0 / max(abs(diskDir.y), 0.22);
+	          float sheetWeight = clamp(
+	            sheetCoverage * radialFeather * stepSize * grazingPath / max(effectiveSheetHeight * 2.8, 0.001),
+	            0.0,
+	            0.86
+	          );
+	          if (sheetWeight > 0.001) {
+	            float surfaceOpacity = 0.0;
+	            vec3 surfaceDiskPoint = vec3(diskPoint.x, 0.0, diskPoint.z);
+	            float surfaceWorldR = surfaceRadius;
+	            vec3 surfaceLight = accretionDiskSurfaceEmission(surfaceDiskPoint, diskDir, time, bendAccum, surfaceWorldR, surfaceOpacity);
+	            color += surfaceLight * transmittance * sheetWeight * 0.95;
+	            transmittance *= 1.0 - clamp(surfaceOpacity * sheetWeight * 0.72, 0.0, 0.22);
 	          }
 	        }
 	        float shellOpacity = 0.0;
@@ -318,11 +344,13 @@ const fragmentShader = /* glsl */ `
 	        vec3 flowLight = vec3(0.0);
 	        float diskR = length(diskPoint.xz);
 	        float diskAge = smoothstep(1.6, 6.8, diskR);
-	        float sampleHeight = mix(0.32, 0.95, diskAge);
-	        if (diskR > 1.36 && diskR < 7.25 && abs(diskPoint.y) < sampleHeight) {
+	        float sampleHeight = mix(0.42, 1.15, diskAge);
+	        float flowCoverage = exp(-pow(abs(diskPoint.y) / max(sampleHeight * 1.18, 0.05), 1.24));
+	        if (diskR > 1.24 && diskR < 7.55) {
 	          flowLight = accretionFlowEmission(diskPoint, diskDir, time, flowOpacity);
 	          float wrapBoost = 1.0 + uLensing * smoothstep(0.65, 1.8, bendAccum) * exp(-abs(pointR - photonSphere) / 0.75);
-	          flowLight *= wrapBoost;
+	          flowLight *= wrapBoost * mix(0.16, 1.0, flowCoverage);
+	          flowOpacity *= mix(0.22, 1.0, flowCoverage);
 	        }
 	        color += (flowLight + shellLight) * transmittance * stepSize;
 	        transmittance *= 1.0 - clamp((flowOpacity + shellOpacity) * stepSize, 0.0, 0.24);
@@ -335,49 +363,49 @@ const fragmentShader = /* glsl */ `
 	      vec3 escaped = normalize(dir);
 	      float backgroundLensing = exp(-abs(minR - photonSphere * 1.25) / 0.95) * uLensing;
 	      vec3 bg = starField(escaped, uStarDensity, backgroundLensing);
-	      float lensGlow = exp(-abs(minR - photonSphere) / 0.11) * (0.25 + uLensing * 0.35);
-	      bg += vec3(1.0, 0.72, 0.34) * lensGlow * (0.012 + uGlare * 0.012);
+	      float lensGlow = exp(-abs(minR - photonSphere) / 0.42) * (0.12 + uLensing * 0.18);
+	      bg += vec3(1.0, 0.72, 0.34) * lensGlow * (0.004 + uGlare * 0.006);
 	      color += bg * transmittance;
 	    }
 
 	    float visualHorizon = mix(1.08, 1.48, uLensing) * mix(0.98, 1.08, uCameraDistance);
-	    float centeredShadow = smoothstep(visualHorizon * 1.08, visualHorizon * 0.88, impact);
-	    float captureShadow = captured ? smoothstep(visualHorizon * 1.55, visualHorizon * 1.05, impact) : 0.0;
+	    float impactWidth = max(fwidth(impact), 0.008);
+	    float centeredShadow = smoothstep(visualHorizon * 1.08 + impactWidth * 2.0, visualHorizon * 0.88 - impactWidth * 2.0, impact);
+	    float captureShadow = captured ? smoothstep(visualHorizon * 1.55 + impactWidth * 2.0, visualHorizon * 1.05 - impactWidth * 2.0, impact) : 0.0;
 	    float shadow = max(centeredShadow, captureShadow);
 	    float photonEscape = smoothstep(0.08, 0.58, abs(minR - photonSphere));
 	    color = mix(color, vec3(0.0), shadow * mix(0.62, 0.985, photonEscape));
 
 	    vec3 diskEscape = diskBasis * normalize(dir);
-	    float outsideShadow = smoothstep(visualHorizon * 0.96, visualHorizon * 1.18, impact);
-	    float lensedReturn = exp(-abs(minR - photonSphere * 1.12) / 0.46);
-	    lensedReturn *= smoothstep(0.28, 1.46, bendAccum);
-	    lensedReturn *= exp(-pow(abs(diskEscape.y) / 0.72, 1.22));
-	    lensedReturn *= outsideShadow * uLensing * uDiskLuminosity;
-	    float horizonSkirt = exp(-abs(impact - visualHorizon * 1.42) / 0.32);
-	    horizonSkirt *= smoothstep(0.2, 1.18, bendAccum) * outsideShadow;
-	    horizonSkirt *= uLensing * uDiskLuminosity;
-	    color += thermalColor(0.72) * lensedReturn * (0.08 + uExposure * 0.28);
-	    color += vec3(1.0, 0.58, 0.2) * horizonSkirt * (0.018 + uExposure * 0.045);
-
-	    float primaryRim = exp(-abs(impact - visualHorizon * 1.08) / 0.065);
-	    float photonHalo = exp(-abs(minR - photonSphere) / 0.24) * 0.012;
-	    vec3 rimColor = vec3(1.0, 0.9, 0.64);
-	    color += rimColor * (primaryRim * 0.1 + photonHalo) * (0.28 + uExposure * 0.62);
+	    float rimDistance = impact - visualHorizon;
+	    float rimFeather = max(0.16, impactWidth * 5.0);
+	    float outsideShadow = smoothstep(-rimFeather, rimFeather * 2.0, rimDistance);
+	    float lensActivity = smoothstep(0.24, 1.46, bendAccum) * outsideShadow * uLensing;
+	    float photonSoftness = exp(-abs(minR - photonSphere) / 0.72);
+	    float diskReturnMask = exp(-pow(abs(diskEscape.y) / 0.86, 1.18)) * uDiskLuminosity;
+	    float outerRimDistance = max(rimDistance + rimFeather * 0.32, 0.0);
+	    float unifiedRimGlow = exp(-outerRimDistance / 0.62);
+	    unifiedRimGlow *= outsideShadow * (0.72 + photonSoftness * 0.18) * uGlare;
+	    float broadDiskReturn = exp(-max(rimDistance, 0.0) / 0.85);
+	    broadDiskReturn *= lensActivity * diskReturnMask;
+	    vec3 rimColor = mix(thermalColor(0.72), vec3(1.0, 0.9, 0.64), 0.38);
+	    color += rimColor * unifiedRimGlow * (0.06 + uExposure * 0.18);
+	    color += thermalColor(0.7) * broadDiskReturn * (0.055 + uExposure * 0.19);
 
 	    vec2 screenUv = p / vec2(aspect, 1.0);
 	    float horizontalGlare = exp(-abs(screenUv.y) * 16.0) * exp(-abs(screenUv.x) * 0.55);
 	    float diagonalGlare = exp(-abs(screenUv.y + screenUv.x * 0.22) * 22.0) * 0.45;
-	    float hotCore = exp(-abs(impact - visualHorizon * 1.16) / 0.2);
-	    vec3 glareColor = vec3(1.0, 0.86, 0.54) * (horizontalGlare + diagonalGlare) * hotCore * uGlare * (0.12 + uExposure * 0.28);
+	    vec3 glareColor = vec3(1.0, 0.86, 0.54) * (horizontalGlare + diagonalGlare) * unifiedRimGlow * uGlare * (0.072 + uExposure * 0.18);
 	    color += glareColor;
-
-	    float fringe = exp(-abs(impact - visualHorizon * 1.12) / 0.11) * uGlare;
-	    color += vec3(0.08, -0.01, -0.05) * fringe * 0.18;
-	    color += (hash21(vUv * uResolution + time) - 0.5) * mix(0.008, 0.014, uGlare);
 
     float vignette = smoothstep(1.85, 0.28, length(p / vec2(aspect, 1.0)));
     color *= 0.72 + vignette * 0.34;
-    gl_FragColor = vec4(aces(color), 1.0);
+    vec3 mappedColor = aces(color);
+    float dither = hash21(
+      vUv * uResolution + vec2(floor(uTime * 60.0), floor(uTime * 37.0))
+    ) - 0.5;
+    mappedColor = clamp(mappedColor + dither * mix(0.75, 1.25, uGlare) / 255.0, 0.0, 1.0);
+    gl_FragColor = vec4(mappedColor, 1.0);
   }
 `;
 
@@ -476,6 +504,8 @@ export class ThreeBlackHoleRenderer {
       fragmentShader,
       uniforms: this.uniforms
     });
+    (this.material.extensions as unknown as Record<string, boolean>).derivatives =
+      true;
     this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material));
     this.orientation.copy(this.initialOrientation);
     this.attachInput();
